@@ -386,6 +386,52 @@ Value setgenerate(const Array& params, bool fHelp)
     return Value::null;
 }
 
+Value GetNetworkHashPS(int lookup) {
+    if (pindexBest == NULL)
+        return 0;
+
+    // If lookup is -1, then use last 520 blocks 
+    if (lookup <= 0)
+        lookup = pindexBest->nHeight % 120 + 1;
+
+    // If lookup is larger than chain, then set it to chain length.
+    if (lookup > pindexBest->nHeight)
+        lookup = pindexBest->nHeight;
+
+    printf("First BLOCK: %d \n",pindexBest->nHeight);
+    
+    CBlockIndex* pindexPrev = pindexBest;
+    //for (int i = 0; i < lookup; i++)
+    //    pindexPrev = pindexPrev->pprev;
+    int i = 0;
+    while(i < lookup) {
+        pindexPrev = pindexPrev->pprev;
+        if(!pindexPrev->IsProofOfWork()) {
+        
+            while(!pindexPrev->IsProofOfWork()){
+                pindexPrev = pindexPrev->pprev;
+            }            
+        }
+    i++;
+    }
+
+    printf("LAST BLOCK: %d \n",pindexPrev->nHeight);
+    double timeDiff = pindexBest->GetBlockTime() - pindexPrev->GetBlockTime();
+    double timePerBlock = timeDiff / lookup;
+
+    return (boost::int64_t)(((double)GetDifficulty() * pow(2.0, 32)) / timePerBlock);
+}
+
+Value getnetworkhashps(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() > 1)
+        throw runtime_error(
+            "getnetworkhashps [blocks]\n"
+            "Returns the estimated network hashes per second based on the last 520 blocks.\n"
+            "Pass in [blocks] to override # of blocks, -1 specifies since last difficulty change.");
+
+    return GetNetworkHashPS(params.size() > 0 ? params[0].get_int() : 520);
+}
 
 Value gethashespersec(const Array& params, bool fHelp)
 {
@@ -447,6 +493,7 @@ Value getmininginfo(const Array& params, bool fHelp)
     obj.push_back(Pair("generate",      GetBoolArg("-gen")));
     obj.push_back(Pair("genproclimit",  (int)GetArg("-genproclimit", -1)));
     obj.push_back(Pair("hashespersec",  gethashespersec(params, false)));
+    obj.push_back(Pair("networkhashps", getnetworkhashps(params, false)));
     obj.push_back(Pair("pooledtx",      (uint64_t)mempool.size()));
     obj.push_back(Pair("testnet",       fTestNet));
     return obj;
@@ -2668,6 +2715,7 @@ static const CRPCCommand vRPCCommands[] =
     { "getconnectioncount",     &getconnectioncount,     true },
     { "getdifficulty",          &getdifficulty,          true },
     { "getpowreward",           &getpowreward,           true },
+    { "getnetworkhashps",       &getnetworkhashps,       true },
     { "getgenerate",            &getgenerate,            true },
     { "setgenerate",            &setgenerate,            true },
     { "gethashespersec",        &gethashespersec,        true },
