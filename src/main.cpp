@@ -34,7 +34,8 @@ map<uint256, CBlockIndex*> mapBlockIndex;
 set<pair<COutPoint, unsigned int> > setStakeSeen;
 uint256 hashGenesisBlock = hashGenesisBlockOfficial;
 static CBigNum bnProofOfWorkLimit(~uint256(0) >> 20);
-static CBigNum bnProofOfStakeLimit(~uint256(0) >> 30);
+static CBigNum bnProofOfStakeLimit(~uint256(0) >> 24);
+static CBigNum bnProofOfStakeHardLimit(~uint256(0) >> 30);
 static CBigNum bnInitialHashTarget(~uint256(0) >> 20);
 unsigned int nStakeMinAge = STAKE_MIN_AGE;
 int nCoinbaseMaturity = COINBASE_MATURITY_PPC;
@@ -893,17 +894,19 @@ static const int64 nTargetSpacingWorkMax = 12 * STAKE_TARGET_SPACING; // 2-hour
 //
 unsigned int ComputeMinWork(unsigned int nBase, int64 nTime)
 {
+    CBigNum bnTargetLimit = bnProofOfWorkLimit;
+
     CBigNum bnResult;
     bnResult.SetCompact(nBase);
     bnResult *= 2;
-    while (nTime > 0 && bnResult < bnProofOfWorkLimit)
+    while (nTime > 0 && bnResult < bnTargetLimit)
     {
         // Maximum 200% adjustment per day...
         bnResult *= 2;
         nTime -= 24 * 60 * 60;
     }
-    if (bnResult > bnProofOfWorkLimit)
-        bnResult = bnProofOfWorkLimit;
+    if (bnResult > bnTargetLimit)
+        bnResult = bnTargetLimit;
     return bnResult.GetCompact();
 }
 
@@ -917,7 +920,16 @@ const CBlockIndex* GetLastBlockIndex(const CBlockIndex* pindex, bool fProofOfSta
 
 unsigned int static GetNextTargetRequired(const CBlockIndex* pindexLast, bool fProofOfStake)
 {
-    CBigNum bnTargetLimit = (fProofOfStake && CBlockIndex::IsSuperMajority(3, pindexLast, 950, 1000)) ? bnProofOfStakeLimit : bnProofOfWorkLimit;
+    CBigNum bnTargetLimit = bnProofOfWorkLimit;
+
+    if(fProofOfStake)
+    {
+        // Proof-of-Stake blocks has own target limit since nVersion=3 supermajority on mainNet and always on testNet
+        if(fTestNet || (pindexLast->nHeight + 1 > 15000))
+            bnTargetLimit = bnProofOfStakeLimit;
+        else if(pindexLast->nHeight + 1 > 14060)
+            bnTargetLimit = bnProofOfStakeHardLimit;
+    }
 
     if (pindexLast == NULL)
         return bnTargetLimit.GetCompact(); // genesis block
@@ -1959,22 +1971,13 @@ bool CBlock::AcceptBlock()
     if (!Checkpoints::CheckSync(hash, pindexPrev))
         return error("AcceptBlock() : rejected by synchronized checkpoint");
 
-    // Reject block.nVersion < 3 blocks when 95% (75% on testnet) of the network has upgraded:
-    if (nVersion < 3)
-    {
-        if ((!fTestNet && CBlockIndex::IsSuperMajority(3, pindexPrev, 950, 1000)) || (fTestNet && CBlockIndex::IsSuperMajority(3, pindexPrev, 75, 100)))
-        {
-            return error("CheckBlock() : rejected nVersion < 3 block");
-        }
-    }
+    // Reject block.nVersion < 3 blocks since 95% threshold on mainNet and always on testNet:
+    if (nVersion < 3 && ((!fTestNet && nHeight > 14060) || (fTestNet && nHeight > 0)))
+        return error("CheckBlock() : rejected nVersion < 3 block");
 
-    if(nHeight > 0)
-    {
-        CScript expect = CScript() << nHeight;
-
-        if (!std::equal(expect.begin(), expect.end(), vtx[0].vin[0].scriptSig.begin()))
-            return DoS(100, error("AcceptBlock() : block height mismatch in coinbase"));
-    }
+    CScript expect = CScript() << nHeight;
+    if (!std::equal(expect.begin(), expect.end(), vtx[0].vin[0].scriptSig.begin()))
+        return DoS(100, error("AcceptBlock() : block height mismatch in coinbase"));
 
     // Write block to history file
     if (!CheckDiskSpace(::GetSerializeSize(*this, SER_DISK, CLIENT_VERSION)))
@@ -2124,11 +2127,10 @@ bool CBlock::SignBlock(const CKeyStore& keystore)
 {
     vector<valtype> vSolutions;
     txnouttype whichType;
-    int nVouts = nTime < 1361664000 ? 1 : vtx[0].vout.size();
 
     if(!IsProofOfStake())
     {
-        for(int i = 0; i < nVouts; i++)
+        for(int i = 0; i < vtx[0].vout.size(); i++)
         {
             const CTxOut& txout = vtx[0].vout[i];
 
@@ -2186,7 +2188,6 @@ bool CBlock::CheckBlockSignature() const
 
     vector<valtype> vSolutions;
     txnouttype whichType;
-    int nVouts = nTime < 1361664000 ? 1 : vtx[0].vout.size();
 
     if(IsProofOfStake())
     {
@@ -2207,7 +2208,7 @@ bool CBlock::CheckBlockSignature() const
     }
     else
     {
-        for(int i = 0; i < nVouts; i++)
+        for(int i = 0; i < vtx[0].vout.size(); i++)
         {
             const CTxOut& txout = vtx[0].vout[i];
 
@@ -2232,11 +2233,6 @@ bool CBlock::CheckBlockSignature() const
     }
     return false;
 }
-
-
-
-
-
 
 bool CheckDiskSpace(uint64 nAdditionalBytes)
 {
